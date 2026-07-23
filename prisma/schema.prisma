@@ -10,7 +10,7 @@ generator client {
 // See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
   provider = "sqlite"
-  url      = "file:dev.sqlite"
+  url      = env("DATABASE_URL")
 }
 
 model Session {
@@ -79,4 +79,102 @@ model CustomerAccountUrls {
   tokenUrl         String?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
+}
+
+model FaqEntry {
+  id         String   @id @default(cuid())
+  shopDomain String
+  question   String
+  answer     String
+  tags       String?
+  source     String   @default("manual")
+  published  Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([shopDomain, published])
+}
+
+model MetafieldPermission {
+  id         String   @id @default(cuid())
+  shopDomain String
+  ownerType  String   // PRODUCT | VARIANT
+  namespace  String
+  key        String
+  enabled    Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([shopDomain, ownerType, namespace, key])
+  @@index([shopDomain, ownerType, enabled])
+}
+
+// ── App-level per-shop configuration ──────────────────────────────────────
+// Settings managed in the app admin. These override theme extension defaults
+// so merchants can configure the chatbot without touching the theme editor.
+
+model ShopConfig {
+  id           String   @id @default(cuid())
+  shopDomain   String   @unique
+  bubbleColor  String   @default("#5046E4")
+  welcomeMsg   String   @default("👋 Hi there! How can I help you today?")
+  promptType   String   @default("standardAssistant")
+  presetConfig String?  // JSON — welcome screen, feature cards, chips
+  updatedAt    DateTime @updatedAt
+  createdAt    DateTime @default(now())
+}
+// Per-shop catalog snapshot used to ground the AI's responses.
+// Each row is one knowledge "slice" (collections, productTypes, pages, etc.)
+// and is refreshed on install + every 30 minutes.
+
+model StoreKnowledge {
+  id         String   @id @default(cuid())
+  shopDomain String
+  type       String   // "summary" | "collections" | "productTypes" | "pages" | "blogs"
+  content    String   // Compact JSON
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([shopDomain, type])
+  @@index([shopDomain])
+}
+
+model SyncStatus {
+  id         String    @id @default(cuid())
+  shopDomain String    @unique
+  status     String    @default("idle")   // "idle" | "running" | "completed" | "failed"
+  progress   String?   // Human-readable current step
+  lastSyncAt DateTime?
+  error      String?
+  updatedAt  DateTime  @updatedAt
+}
+
+model SyncLog {
+  id          String    @id @default(cuid())
+  shopDomain  String
+  trigger     String    // "manual" | "automatic"
+  status      String    // "running" | "completed" | "failed"
+  error       String?
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([shopDomain])
+  @@index([startedAt])
+}
+
+// ── Query Log ──────────────────────────────────────────────────────────────
+// Records questions the AI couldn't confidently answer so admins can
+// add FAQs or improve the store data.
+
+model QueryLog {
+  id             String   @id @default(cuid())
+  shopDomain     String
+  query          String   // The user's original question
+  aiResponse     String?  // Short excerpt of the AI response
+  reason         String   // "no_results" | "ai_uncertain" | "out_of_scope" | "tool_error"
+  conversationId String?
+  createdAt      DateTime @default(now())
+
+  @@index([shopDomain])
+  @@index([createdAt])
 }

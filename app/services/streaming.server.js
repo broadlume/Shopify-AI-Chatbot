@@ -52,17 +52,38 @@ export function createStreamManager(encoder, controller) {
   const handleStreamingError = (error) => {
     console.error('Error processing streaming request:', error);
 
-    if (error.status === 401 || error.message.includes('auth') || error.message.includes('key')) {
-      sendError({
-        type: 'error',
-        error: 'Authentication failed with Claude API',
-        details: 'Please check your API key in environment variables'
-      });
-    } else if (error.status === 429 || error.status === 529 || error.message.includes('Overloaded')) {
+    // Check rate-limit FIRST — a 429 error message contains "key=" in the URL
+    // which would otherwise trip the 'key' substring check in the auth branch.
+    if (
+      error.status === 429 ||
+      error.status === 529 ||
+      error.message?.includes('RESOURCE_EXHAUSTED') ||
+      error.message?.includes('Too Many Requests') ||
+      error.message?.includes('Overloaded') ||
+      error.message?.includes('quota')
+    ) {
+      // Extract retry delay from the error message if present (e.g. "retry in 23s")
+      const retryMatch = error.message?.match(/retry\s+in\s+([\d.]+)\s*s/i);
+      const retryMsg = retryMatch
+        ? `Free-tier quota reached. Please try again in ~${Math.ceil(parseFloat(retryMatch[1]))} seconds.`
+        : 'Free-tier quota reached. Please wait a moment and try again.';
       sendError({
         type: 'rate_limit_exceeded',
         error: 'Rate limit exceeded',
-        details: 'Please try again later'
+        details: retryMsg
+      });
+    } else if (
+      error.status === 401 ||
+      error.status === 403 ||
+      error.message?.includes('API_KEY_INVALID') ||
+      error.message?.includes('invalid api key') ||
+      error.message?.includes('invalid_api_key') ||
+      (error.message?.includes('auth') && !error.message?.includes('key='))
+    ) {
+      sendError({
+        type: 'error',
+        error: 'Authentication failed with Anthropic API',
+        details: 'Please check your ANTHROPIC_API_KEY in environment variables'
       });
     } else {
       sendError({

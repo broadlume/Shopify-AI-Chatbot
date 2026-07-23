@@ -37,15 +37,43 @@ if (host === "localhost") {
 
 export default defineConfig({
   server: {
-    allowedHosts: [host],
+    // Allow any hostname so the Cloudflare dev tunnel (whose hostname changes on
+    // every `shopify app dev` restart) is never blocked.  The restricted list
+    // `[host]` caused Vite to reject tunnel requests before SHOPIFY_APP_URL was
+    // fully propagated, producing a connection-drop that Cloudflare surfaced as
+    // HTTP 530 in the browser.
+    allowedHosts: true,
+    // Pre-warm all route modules so the /__manifest fog-of-war endpoint never
+    // has to cold-load a module during the first client-side navigation.
+    warmup: {
+      clientFiles: ['./app/routes/**/*.{jsx,tsx,js,ts}'],
+      ssrFiles:    ['./app/routes/**/*.{jsx,tsx,js,ts}'],
+    },
+    // Fully handle CORS at the Vite dev-server layer so OPTIONS preflights
+    // from the storefront origin are answered before React Router routing.
     cors: {
-      preflightContinue: true,
+      origin: true,                      // echo back any Origin header
+      methods: ['GET', 'POST', 'OPTIONS'],
+      allowedHeaders: [
+        'Content-Type',
+        'Accept',
+        'X-Shopify-Shop-Id',
+        'X-Shopify-Shop-Domain',
+        'X-Requested-With',
+      ],
+      credentials: true,
+      maxAge: 86400,
+      preflightContinue: false,          // answer OPTIONS here, don't pass through
+      optionsSuccessStatus: 204,
     },
     port: Number(process.env.PORT || 3000),
     hmr: hmrConfig,
     fs: {
-      // See https://vitejs.dev/config/server-options.html#server-fs-allow for more information
-      allow: ["app", "node_modules"],
+      // Allow access to all project files so the React Router dev plugin can
+      // read routes.js (at the project root) when building the /__manifest
+      // response for fog-of-war lazy route discovery.
+      // See https://vitejs.dev/config/server-options.html#server-fs-allow
+      allow: [".", "app", "node_modules"],
     },
   },
   plugins: [reactRouter(), tsconfigPaths()],

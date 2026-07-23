@@ -15,7 +15,12 @@ export default function App() {
   return (
     <AppProvider embedded apiKey={apiKey}>
       <s-app-nav>
-        <s-link href="/app">Home</s-link>
+        <s-link href="/app/faq">FAQ Knowledge</s-link>
+        <s-link href="/app/metafields">Metafield Access</s-link>
+        <s-link href="/app/settings">Sync Information</s-link>
+        <s-link href="/app/query-logs">Query Log</s-link>
+        <s-link href="/app/preset-config">Preset Configuration</s-link>
+        <s-link href="/app/config">Settings</s-link>
       </s-app-nav>
       <Outlet />
     </AppProvider>

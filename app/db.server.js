@@ -257,3 +257,375 @@ export async function getCustomerAccountUrls(conversationId) {
     return null;
   }
 }
+
+/**
+ * Get offline admin access token for a shop
+ * @param {string} shopDomain - Shop domain in myshopify format
+ * @returns {Promise<string|null>} - Access token or null
+ */
+export async function getOfflineAccessTokenByShop(shopDomain) {
+  try {
+    if (!shopDomain) return null;
+
+    const session = await prisma.session.findFirst({
+      where: {
+        shop: shopDomain,
+        isOnline: false,
+      },
+      orderBy: {
+        expires: 'desc',
+      },
+    });
+
+    return session?.accessToken || null;
+  } catch (error) {
+    console.error('Error retrieving offline access token:', error);
+    return null;
+  }
+}
+
+/**
+ * List FAQ entries for a given shop
+ * @param {string} shopDomain - Shop domain
+ * @param {Object} options - Query options
+ * @param {boolean} options.publishedOnly - If true, only return published FAQs
+ * @returns {Promise<Array>} - FAQ entries
+ */
+export async function listFaqEntries(shopDomain, { publishedOnly = false } = {}) {
+  try {
+    return await prisma.faqEntry.findMany({
+      where: {
+        shopDomain,
+        ...(publishedOnly ? { published: true } : {}),
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+  } catch (error) {
+    console.error('Error listing FAQ entries:', error);
+    return [];
+  }
+}
+
+/**
+ * Create a new FAQ entry
+ * @param {Object} payload - FAQ data
+ * @returns {Promise<Object>} - Created FAQ entry
+ */
+export async function createFaqEntry(payload) {
+  try {
+    return await prisma.faqEntry.create({
+      data: payload,
+    });
+  } catch (error) {
+    console.error('Error creating FAQ entry:', error);
+    throw error;
+  }
+}
+
+/**
+ * Update an existing FAQ entry
+ * @param {string} id - FAQ ID
+ * @param {Object} payload - FAQ fields
+ * @returns {Promise<Object>} - Updated FAQ entry
+ */
+export async function updateFaqEntry(id, payload) {
+  try {
+    return await prisma.faqEntry.update({
+      where: { id },
+      data: payload,
+    });
+  } catch (error) {
+    console.error('Error updating FAQ entry:', error);
+    throw error;
+  }
+}
+
+/**
+ * Delete a FAQ entry
+ * @param {string} id - FAQ ID
+ * @returns {Promise<Object>} - Deleted FAQ entry
+ */
+export async function deleteFaqEntry(id) {
+  try {
+    return await prisma.faqEntry.delete({
+      where: { id },
+    });
+  } catch (error) {
+    console.error('Error deleting FAQ entry:', error);
+    throw error;
+  }
+}
+
+/**
+ * Bulk upsert FAQ entries for a shop
+ * @param {string} shopDomain - Shop domain
+ * @param {Array} entries - FAQ entries in {question, answer, tags, source, published}
+ * @returns {Promise<number>} - Number of created entries
+ */
+export async function bulkCreateFaqEntries(shopDomain, entries) {
+  try {
+    const sanitizedEntries = entries
+      .filter((entry) => entry?.question && entry?.answer)
+      .map((entry) => ({
+        shopDomain,
+        question: String(entry.question).trim(),
+        answer: String(entry.answer).trim(),
+        tags: entry.tags ? String(entry.tags).trim() : null,
+        source: entry.source ? String(entry.source).trim() : 'shopify_kb',
+        published: typeof entry.published === 'boolean' ? entry.published : true,
+      }));
+
+    if (sanitizedEntries.length === 0) return 0;
+
+    const result = await prisma.faqEntry.createMany({
+      data: sanitizedEntries,
+    });
+
+    return result.count;
+  } catch (error) {
+    console.error('Error bulk creating FAQ entries:', error);
+    throw error;
+  }
+}
+
+/**
+ * Search FAQ entries using simple keyword scoring
+ * @param {string} shopDomain - Shop domain
+ * @param {string} query - User question
+ * @param {number} limit - Max entries to return
+ * @returns {Promise<Array>} - Matching FAQs
+ */
+export async function searchFaqEntries(shopDomain, query, limit = 5) {
+  const normalizedQuery = String(query || '').toLowerCase().trim();
+  if (!normalizedQuery) return [];
+
+  const tokens = normalizedQuery
+    .split(/\s+/)
+    .map((token) => token.replace(/[^a-z0-9]/gi, ''))
+    .filter(Boolean);
+
+  if (tokens.length === 0) return [];
+
+  try {
+    const entries = await prisma.faqEntry.findMany({
+      where: {
+        shopDomain,
+        published: true,
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: 200,
+    });
+
+    const scored = entries
+      .map((entry) => {
+        const haystack = `${entry.question} ${entry.answer} ${entry.tags || ''}`.toLowerCase();
+        const score = tokens.reduce((total, token) => {
+          if (!haystack.includes(token)) return total;
+          if (entry.question.toLowerCase().includes(token)) return total + 3;
+          if ((entry.tags || '').toLowerCase().includes(token)) return total + 2;
+          return total + 1;
+        }, 0);
+
+        return { ...entry, score };
+      })
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => b.score - a.score || Number(b.updatedAt) - Number(a.updatedAt))
+      .slice(0, Math.max(1, Math.min(limit, 10)));
+
+    return scored;
+  } catch (error) {
+    console.error('Error searching FAQ entries:', error);
+    return [];
+  }
+}
+
+/**
+ * List metafield permissions for a shop
+ * @param {string} shopDomain - Shop domain
+ * @returns {Promise<Array>} - Permission rows
+ */
+export async function listMetafieldPermissions(shopDomain) {
+  try {
+    return await prisma.metafieldPermission.findMany({
+      where: { shopDomain },
+      orderBy: [
+        { ownerType: 'asc' },
+        { namespace: 'asc' },
+        { key: 'asc' },
+      ],
+    });
+  } catch (error) {
+    console.error('Error listing metafield permissions:', error);
+    return [];
+  }
+}
+
+/**
+ * Create or enable a metafield permission
+ * @param {Object} payload - Permission fields
+ * @returns {Promise<Object>} - Upserted permission
+ */
+export async function upsertMetafieldPermission(payload) {
+  try {
+    const { shopDomain, ownerType, namespace, key } = payload;
+
+    return await prisma.metafieldPermission.upsert({
+      where: {
+        shopDomain_ownerType_namespace_key: {
+          shopDomain,
+          ownerType,
+          namespace,
+          key,
+        },
+      },
+      create: {
+        shopDomain,
+        ownerType,
+        namespace,
+        key,
+        enabled: true,
+      },
+      update: {
+        enabled: true,
+        updatedAt: new Date(),
+      },
+    });
+  } catch (error) {
+    console.error('Error upserting metafield permission:', error);
+    throw error;
+  }
+}
+
+/**
+ * Toggle metafield permission enabled state
+ * @param {string} id - Permission ID
+ * @param {boolean} enabled - Enabled flag
+ * @returns {Promise<Object>} - Updated permission
+ */
+export async function updateMetafieldPermission(id, enabled) {
+  try {
+    return await prisma.metafieldPermission.update({
+      where: { id },
+      data: {
+        enabled,
+        updatedAt: new Date(),
+      },
+    });
+  } catch (error) {
+    console.error('Error updating metafield permission:', error);
+    throw error;
+  }
+}
+
+/**
+ * Delete metafield permission row
+ * @param {string} id - Permission ID
+ * @returns {Promise<Object>} - Deleted permission
+ */
+export async function deleteMetafieldPermission(id) {
+  try {
+    return await prisma.metafieldPermission.delete({
+      where: { id },
+    });
+  } catch (error) {
+    console.error('Error deleting metafield permission:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get enabled metafield permissions split by owner type
+ * @param {string} shopDomain - Shop domain
+ * @returns {Promise<{product: Array, variant: Array}>} - Owner type buckets
+ */
+export async function getEnabledMetafieldPermissions(shopDomain) {
+  try {
+    const rows = await prisma.metafieldPermission.findMany({
+      where: {
+        shopDomain,
+        enabled: true,
+      },
+      orderBy: [
+        { ownerType: 'asc' },
+        { namespace: 'asc' },
+        { key: 'asc' },
+      ],
+    });
+
+    return {
+      product: rows.filter((row) => row.ownerType === 'PRODUCT'),
+      variant: rows.filter((row) => row.ownerType === 'VARIANT'),
+    };
+  } catch (error) {
+    console.error('Error getting enabled metafield permissions:', error);
+    return { product: [], variant: [] };
+  }
+}
+
+// ── Query Log helpers ──────────────────────────────────────────────────────
+
+export async function createQueryLog(shopDomain, { query, aiResponse, reason, conversationId }) {
+  try {
+    return await prisma.queryLog.create({
+      data: { shopDomain, query: query?.slice(0, 2000) ?? '', aiResponse: aiResponse?.slice(0, 500), reason, conversationId },
+    });
+  } catch (err) {
+    console.error('Error creating query log:', err);
+  }
+}
+
+export async function listQueryLogs(shopDomain, { limit = 100, offset = 0 } = {}) {
+  try {
+    const [items, total] = await Promise.all([
+      prisma.queryLog.findMany({
+        where: { shopDomain },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        skip: offset,
+      }),
+      prisma.queryLog.count({ where: { shopDomain } }),
+    ]);
+    return { items, total };
+  } catch (err) {
+    console.error('Error listing query logs:', err);
+    return { items: [], total: 0 };
+  }
+}
+
+export async function deleteQueryLog(id) {
+  try { return await prisma.queryLog.delete({ where: { id } }); } catch {}
+}
+
+// ── SyncStatus helpers ─────────────────────────────────────────────────────
+
+export async function getSyncStatus(shopDomain) {
+  try {
+    return await prisma.syncStatus.findUnique({ where: { shopDomain } });
+  } catch { return null; }
+}
+
+export async function listSyncLogs(shopDomain, { limit = 50 } = {}) {
+  try {
+    return await prisma.syncLog.findMany({
+      where: { shopDomain },
+      orderBy: { startedAt: 'desc' },
+      take: limit,
+    });
+  } catch { return []; }
+}
+
+// ── ShopConfig helpers ─────────────────────────────────────────────────────
+
+export async function getShopConfig(shopDomain) {
+  try {
+    return await prisma.shopConfig.findUnique({ where: { shopDomain } });
+  } catch { return null; }
+}
+
+export async function upsertShopConfig(shopDomain, data) {
+  return prisma.shopConfig.upsert({
+    where: { shopDomain },
+    create: { shopDomain, ...data },
+    update: data,
+  });
+}

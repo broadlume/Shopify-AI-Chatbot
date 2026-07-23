@@ -1,15 +1,22 @@
 export default function Index() {
   return (
     <s-page>
-      <ui-title-bar title="Shop chat agent reference app" />
+      <ui-title-bar title="Storefront AI shopping assistant" />
 
       <s-section>
         <s-stack gap="base">
-          <s-heading>Congrats on creating a new Shopify app 🎉</s-heading>
+          <s-heading>AI chatbot setup checklist</s-heading>
           <s-paragraph>
-            This is a reference app that adds a chat agent on your storefront,
-            which is powered via claude and can connect shopify mcp platform.
+            This app powers a storefront chat assistant that can search products,
+            handle carts, and answer policy questions using Shopify MCP tools plus
+            your custom FAQ knowledge base.
           </s-paragraph>
+          <ol>
+            <li>Start app dev with Shopify CLI and open your preview store.</li>
+            <li>Enable the theme extension embed in your active theme.</li>
+            <li>Add or import FAQs from the FAQ Knowledge tab.</li>
+            <li>Test product search, cart updates, shipping, and return questions.</li>
+          </ol>
         </s-stack>
       </s-section>
 
@@ -47,7 +54,7 @@ export default function Index() {
       </s-section>
 
       <s-section heading="Next steps" slot="aside">
-        <s-text>Enable the theme extension in your theme editor.</s-text>
+        <s-text>Open FAQ Knowledge and seed store-specific answers.</s-text>
       </s-section>
     </s-page>
   );
