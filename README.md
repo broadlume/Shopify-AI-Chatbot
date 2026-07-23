@@ -1,137 +1,170 @@
-# Build an AI Agent for Your Storefront
+# Shopify AI Chatbot App
 
-A Shopify template app that lets you embed an AI-powered chat widget on your storefront. Shoppers can search for products, ask about policies or shipping, and complete purchases - all without leaving the conversation. Under the hood it speaks the [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) to tap into Shopify’s APIs.
+Embedded Shopify app plus theme extension that adds an AI shopping assistant to a storefront.
 
-## Overview
+The app combines:
 
-- **What it is**: A chat widget + backend that turns any storefront into an AI shopping assistant.
-- **Key features**:
-  - Natural-language product discovery
-  - Store policy & FAQ lookup
-  - Create carts, add or remove items, and initiate checkout
-  - Track orders and initiate returns
+- A React Router admin app for configuration and operations.
+- A theme app extension (`chat-bubble`) for storefront chat UI.
+- A chat backend that streams responses from Anthropic Claude and invokes Shopify MCP tools.
 
-## Developer Docs
-- Everything from installation to deep dives lives on https://shopify.dev/docs/apps/build/storefront-mcp.
-- Clone this repo and follow the instructions on the dev docs.
+## Minimum Env Vars (Quick Start)
 
-## Examples
-- `hi` > will return a LLM based response. Note that you can customize the LLM call with your own prompt.
-- `can you search for snowboards` > will use the `search_shop_catalog` MCP tool.
-- `add The Videographer Snowboard to my cart` > will use the `update_cart` MCP tool and offer a checkout URL.
-- `update my cart to make that 2 items please` > will use the `update_cart` MCP tool.
-- `can you tell me what is in my cart` > will use the `get_cart` MCP tool.
-- `what languages is your store available in?` > will use the `search_shop_policies_and_faqs` MCP tool.
-- `I'd like to checkout` > will call checkout from one of the above MCP cart tools.
-- `Show me my recent orders` > will use the `get_most_recent_order_status` MCP tool.
-- `Can you give me more details about order Id 1` > will use the `get_order_status` MCP tool.
-
-## Architecture
-
-### Components
-This app consists of two main components:
-
-1. **Backend**: A React Router app server that handles communication with Google AI Studio (Gemini), processes chat messages, and acts as an MCP Client.
-2. **Chat UI**: A Shopify theme extension that provides the customer-facing chat interface.
-
-When you start the app, it will:
-- Start React Router in development mode.
-- Tunnel your local server so Shopify can reach it.
-- Provide a preview URL to install the app on your development store.
-
-For direct testing, point your test suite at the `/chat` endpoint (GET or POST for streaming).
-
-### MCP Tools Integration
-- The backend already initializes all Shopify MCP tools—see [`app/mcp-client.js`](./app/mcp-client.js).
-- These tools let your LLM invoke product search, cart actions, order lookups, etc.
-- More in our [dev docs](https://shopify.dev/docs/apps/build/storefront-mcp).
-
-### Tech Stack
-- **Framework**: [React Router](https://reactrouter.com/)
-- **AI**: [Google AI Studio (Gemini)](https://aistudio.google.com/)
-- **Shopify Integration**: [@shopify/shopify-app-react-router](https://www.npmjs.com/package/@shopify/shopify-app-react-router)
-- **Database**: SQLite (via Prisma) for session storage
-
-## Customizations
-This repo can be customized. You can:
-- Edit the prompt
-- Change the chat widget UI
-- Swap out the LLM
-- Manage a store FAQ knowledge base from the embedded app (`/app/faq`)
-
-You can learn how from our [dev docs](https://shopify.dev/docs/apps/build/storefront-mcp).
-
-## Shopify Knowledge Base + FAQ Grounding
-
-This app now includes a built-in FAQ manager so your AI agent can answer store-specific support questions reliably.
-
-- Open the embedded app and go to **FAQ Knowledge**.
-- Add FAQs manually, or bulk import a JSON array copied/exported from your Shopify Knowledge Base workflow.
-- The assistant uses the `search_store_faqs` tool during chat for policy and support questions.
-
-## Product and Variant Metafields with Namespace Restrictions
-
-The chat backend includes a local tool named `get_product_with_restricted_metafields`.
-
-- It fetches product + variant metafields using Admin GraphQL.
-- It enforces separate server-side permission lists for **product metafields** and **variant metafields** from the admin panel: `/app/metafields`.
-- You can allow individual metafields by namespace + key for each owner type independently.
-- Any requested namespace outside allowed lists is rejected.
-
-Example:
+For first local run, these are the minimum values you should define in `.env`:
 
 ```bash
-PRODUCT_ALLOWED_METAFIELD_NAMESPACES=$app,specs
-VARIANT_ALLOWED_METAFIELD_NAMESPACES=$app,compliance
-METAFIELD_VARIANT_LIMIT=25
+ANTHROPIC_API_KEY=<your_anthropic_api_key>
+SHOPIFY_API_KEY=<your_shopify_app_client_id>
+SHOPIFY_API_SECRET=<your_shopify_app_client_secret>
+SHOPIFY_APP_URL=<your_tunnel_or_local_url>
+SCOPES=unauthenticated_read_product_listings,read_products,read_content,read_product_listings
+DATABASE_URL=file:./dev.sqlite
 ```
 
-Fallback env allowlists are used if no admin permissions are configured yet for a given owner type.
+You can start from `.env.example` and then customize optional values such as `ANTHROPIC_MODEL`, `REDIRECT_URL`, and metafield fallback settings.
 
-Example import format:
+## Features
 
-```json
-[
-  {
-    "question": "What are your shipping times?",
-    "answer": "Orders ship in 1-2 business days and arrive in 3-5 business days.",
-    "tags": "shipping, delivery",
-    "source": "shopify_kb"
-  },
-  {
-    "question": "What is your return policy?",
-    "answer": "You can return unused items within 30 days of delivery.",
-    "tags": "returns"
-  }
-]
-```
+- AI chat endpoint with SSE streaming (`/chat`) and conversation history persistence.
+- MCP tool orchestration across:
+  - Storefront tools (catalog, cart, policies/FAQs)
+  - Customer account tools (orders/account-specific actions)
+  - UCP catalog tools (`search_catalog`, `lookup_catalog`, `get_product`) with fallback behavior
+- Store knowledge sync (products, collections, pages, blogs, tags, specs) with:
+  - Automatic background refresh
+  - Manual sync + sync progress UI
+  - Sync run history/logs
+- FAQ knowledge management:
+  - Create/edit/delete/publish FAQs
+  - Bulk import FAQs from JSON/CSV-friendly flows
+  - Query log to capture unresolved user questions and convert them to FAQs
+- Product/variant metafield access controls:
+  - Separate allowlists for `PRODUCT` and `VARIANT`
+  - Per-namespace + key permissions managed in admin
+  - Environment fallback allowlists when admin permissions are not configured yet
+- Preset configuration UI for welcome screen chips/cards and quick actions.
+- Per-shop chatbot settings (welcome message, bubble color, prompt style) that override theme defaults.
 
-## Run Locally
+## Project Structure
 
-1. Install dependencies:
+- `app/`: Embedded admin app + chat API routes + backend services.
+- `extensions/chat-bubble/`: Shopify theme extension for storefront chat bubble/widget.
+- `prisma/`: SQLite schema and migrations for sessions, conversations, FAQs, logs, and config.
+- `shopify.app.toml` / `shopify.app.chatbot.toml`: Shopify app CLI configuration.
+
+## Tech Stack
+
+- React Router 7
+- Shopify App React Router SDK + Polaris
+- Anthropic Messages API (Claude, streaming)
+- Prisma + SQLite
+- Shopify Theme App Extension
+
+## Prerequisites
+
+- Node.js `>= 20.10`
+- npm
+- Shopify CLI
+- A Shopify Partner account and a development store
+- Anthropic API key
+
+## Local Development Setup
+
+1. Install dependencies.
 
 ```bash
 npm install
 ```
 
-2. Create `.env` from `.env.example` and add your `GOOGLE_API_KEY`.
+2. Create your local environment file.
 
-3. Apply database migrations:
+```bash
+cp .env.example .env
+```
+
+3. Update `.env` values (minimum required values below).
+
+```bash
+# Required for AI responses
+ANTHROPIC_API_KEY=<your_anthropic_api_key>
+
+# Optional Claude model override (default from config.server.js)
+ANTHROPIC_MODEL=claude-haiku-4-5
+
+# Shopify values are typically set/managed by Shopify CLI during app dev,
+# but you can define them explicitly when needed:
+SHOPIFY_API_KEY=<your_shopify_app_client_id>
+SHOPIFY_API_SECRET=<your_shopify_app_client_secret>
+SHOPIFY_APP_URL=<your_tunnel_or_local_url>
+SCOPES=unauthenticated_read_product_listings,read_products,read_content,read_product_listings
+REDIRECT_URL=https://localhost:3458/auth/callback
+
+# Optional metafield fallback settings
+PRODUCT_ALLOWED_METAFIELD_NAMESPACES=$app,specs
+VARIANT_ALLOWED_METAFIELD_NAMESPACES=$app,compliance
+METAFIELD_VARIANT_LIMIT=25
+```
+
+4. Initialize database and Prisma client.
 
 ```bash
 npm run setup
 ```
 
-4. Start dev server:
+5. Start local development.
+
+```bash
+npm run dev
+```
+
+Notes:
+
+- `npm run dev` runs `shopify app dev`.
+- For first-time scope/config refreshes you may use:
 
 ```bash
 shopify app dev --use-localhost --reset
 ```
 
-5. Enable the theme app embed for the `chat-bubble` extension in Online Store > Themes > Customize.
+- Enable the theme app embed for `chat-bubble` in:
+  Online Store -> Themes -> Customize -> App embeds.
 
-## Deployment
-Follow standard Shopify app deployment procedures as outlined in the [Shopify documentation](https://shopify.dev/docs/apps/deployment/web).
+## App Management and Configuration
 
-## Contributing
-We appreciate your interest in contributing to this project. As this is an example repository intended for educational and reference purposes, we are not accepting contributions.
+After installing the app in your dev store, open the embedded admin app and manage it from these sections:
+
+- `FAQ Knowledge`: maintain grounded Q&A entries, publish/hide items, bulk import.
+- `Metafield Access`: define allowed product/variant metafields exposed to AI answers.
+- `Sync Information`: trigger manual knowledge sync and review status/history.
+- `Query Log`: inspect unanswered customer prompts and convert them into FAQs.
+- `Preset Configuration`: configure welcome cards, suggestion chips, and quick action chips.
+- `Settings`: configure bubble color, welcome text, and prompt style.
+
+## Useful Scripts
+
+- `npm run dev`: run Shopify app in development mode.
+- `npm run build`: production build.
+- `npm run start`: serve built app.
+- `npm run setup`: Prisma generate + migrate deploy.
+- `npm run lint`: run ESLint.
+- `npm run typecheck`: generate route types and run TypeScript checks.
+- `npm run deploy`: deploy app with Shopify CLI.
+- `npm run config:link`, `npm run config:use`, `npm run env`: Shopify CLI config/environment helpers.
+
+## Operational Notes
+
+- Data persistence uses SQLite via Prisma (`DATABASE_URL`).
+- Chat conversations and tool traces rely on per-conversation IDs managed server-side.
+- The project uses Anthropic Claude in backend services.
+
+## Troubleshooting
+
+- If app scopes change in `shopify.app.toml`, re-run development with reset/reinstall flow so token scopes are refreshed.
+- If chat loads but returns AI errors, verify `ANTHROPIC_API_KEY` and model name.
+- If storefront widget does not appear, verify the app embed is enabled in the current theme and the app backend URL is configured.
+- If Prisma-related startup fails, run `npm run setup` again and verify `DATABASE_URL`.
+
+## Reference
+
+- Shopify MCP storefront app docs: https://shopify.dev/docs/apps/build/storefront-mcp
+- Shopify app deployment docs: https://shopify.dev/docs/apps/deployment/web
