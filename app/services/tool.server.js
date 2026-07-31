@@ -146,14 +146,14 @@ export function createToolService({ shopDomain } = {}) {
       query CheckSampling($ids: [ID!]!) {
         nodes(ids: $ids) {
           ... on Product {
-            id title
+            id title status publishedAt
             productSampling: metafield(namespace: "additional_data", key: "enable_sampling") { value }
           }
           ... on ProductVariant {
             id title
             variantSampling: metafield(namespace: "additional_data", key: "enable_sampling") { value }
             product {
-              id title
+              id title status publishedAt
               productSampling: metafield(namespace: "additional_data", key: "enable_sampling") { value }
             }
           }
@@ -185,9 +185,15 @@ export function createToolService({ shopDomain } = {}) {
         const isVariant = 'variantSampling' in node || (node.product !== undefined);
 
         if (isVariant) {
+          const parentProduct = node.product;
+          // Deny sampling for products that aren't active / not published
+          if (parentProduct?.status !== 'ACTIVE' || !parentProduct?.publishedAt) {
+            return { allowed: false, denied: parentProduct?.title || node.title || 'product' };
+          }
+
           const variantVal = node.variantSampling?.value ?? null;   // "true" | "false" | null
-          const productVal = node.product?.productSampling?.value ?? null;
-          const productTitle = node.product?.title || node.title || 'product';
+          const productVal = parentProduct?.productSampling?.value ?? null;
+          const productTitle = parentProduct?.title || node.title || 'product';
 
           console.log(`[chatbot] checkSamplingEligibility variant "${node.title}" variantSampling=${variantVal} productSampling=${productVal}`);
 
@@ -205,6 +211,11 @@ export function createToolService({ shopDomain } = {}) {
           }
         } else {
           // Direct product GID
+          // Deny sampling for products that aren't active / not published
+          if (node.status !== 'ACTIVE' || !node.publishedAt) {
+            return { allowed: false, denied: node.title || 'product' };
+          }
+
           const productVal = node.productSampling?.value ?? null;
           console.log(`[chatbot] checkSamplingEligibility product "${node.title}" productSampling=${productVal}`);
           if (productVal !== 'true') {
@@ -343,6 +354,8 @@ export function createToolService({ shopDomain } = {}) {
 
     // One bulk query: Product fragments give data directly; ProductVariant fragments
     // resolve back to the parent product so we never need a second call.
+    // We also fetch status and publication state so we can filter out
+    // draft/archived products and products not published to the Online Store.
     const query = `
       query FetchProductsBulk($ids: [ID!]!) {
         nodes(ids: $ids) {
@@ -350,9 +363,11 @@ export function createToolService({ shopDomain } = {}) {
             id
             title
             handle
+            status
             descriptionHtml
             vendor
             tags
+            publishedAt
             priceRangeV2 {
               minVariantPrice { amount currencyCode }
             }
@@ -367,9 +382,11 @@ export function createToolService({ shopDomain } = {}) {
               id
               title
               handle
+              status
               descriptionHtml
               vendor
               tags
+              publishedAt
               priceRangeV2 {
                 minVariantPrice { amount currencyCode }
               }
@@ -412,6 +429,7 @@ export function createToolService({ shopDomain } = {}) {
       }
 
       // Collect unique products (variants point to their parent product)
+      // Skip any product that is not ACTIVE or not published to the Online Store.
       const seen = new Set();
       const products = [];
 
@@ -420,6 +438,17 @@ export function createToolService({ shopDomain } = {}) {
         // Variant → unwrap parent product; Product → use directly
         const product = node.handle !== undefined ? node : node.product;
         if (!product?.id || seen.has(product.id)) continue;
+
+        // Filter: must be ACTIVE and published
+        if (product.status !== 'ACTIVE') {
+          console.log(`[chatbot] Skipping product "${product.title}" — status: ${product.status}`);
+          continue;
+        }
+        if (!product.publishedAt) {
+          console.log(`[chatbot] Skipping product "${product.title}" — not published`);
+          continue;
+        }
+
         seen.add(product.id);
         products.push(formatAdminProduct(product));
       }

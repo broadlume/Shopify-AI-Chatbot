@@ -17,9 +17,13 @@ export async function generateAuthUrl(conversationId, shopId) {
 
   // Use the actual app URL for redirect
   const redirectUri = process.env.REDIRECT_URL;
+  if (!redirectUri) {
+    throw new Error('REDIRECT_URL environment variable is missing.');
+  }
 
   // Include the conversation ID and shop ID in the state parameter for tracking
-  const state = `${conversationId}-${shopId}`;
+  // Use '::' as separator (not '-') to avoid ambiguity with IDs that contain hyphens
+  const state = `${conversationId}::${shopId}`;
 
   // Generate code verifier and challenge
   const verifier = generateCodeVerifier();
@@ -57,9 +61,16 @@ export async function generateAuthUrl(conversationId, shopId) {
  */
 async function getBaseAuthUrl(conversationId) {
   const { getCustomerAccountUrls } = await import('./db.server');
-  const { authorizationUrl } = await getCustomerAccountUrls(conversationId);
+  const urls = await getCustomerAccountUrls(conversationId);
 
-  return authorizationUrl;
+  if (!urls) {
+    throw new Error(
+      `Customer account URLs not found for conversation ${conversationId}. ` +
+      'The chat widget must load a product/shop page before auth can be initiated.'
+    );
+  }
+
+  return urls.authorizationUrl;
 }
 
 /**

@@ -1891,7 +1891,7 @@
             break;
 
           case 'content_block_complete':
-            // Do not show typing indicator here — in the Gemini flow this fires
+            // Do not show typing indicator here — this fires
             // after the message is already complete, so showing one causes a
             // permanent indicator that end_turn cannot fully clear.
             break;
@@ -1994,7 +1994,7 @@
                   // Format 2 – plain content array
                   blocks = parsed;
                 } else if (parsed && typeof parsed === 'object' && Array.isArray(parsed.content)) {
-                  // Format 3 – {content:[…], _geminiRawParts:[…]}
+                  // Format 3 – {content:[…]} (Legacy wrapped format)
                   blocks = parsed.content;
                 }
 

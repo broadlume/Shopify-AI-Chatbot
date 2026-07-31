@@ -61,9 +61,10 @@ async function upsertKnowledge(shopDomain, type, content) {
 // ─── Top-level tag frequency helper ────────────────────────────────────────
 // Samples up to `sampleSize` best-selling products and returns the top N tags
 // sorted by frequency. Efficient: one query, no full catalog scan.
+// Only includes ACTIVE products published to the Online Store sales channel.
 async function sampleTopTags(shopDomain, accessToken, sampleSize = 200, topN = 30) {
   const data = await adminQuery(shopDomain, accessToken, `{
-    products(first: ${sampleSize}, sortKey: UPDATED_AT) {
+    products(first: ${sampleSize}, sortKey: UPDATED_AT, query: "status:ACTIVE published_status:published") {
       nodes { tags }
     }
   }`);
@@ -82,9 +83,10 @@ async function sampleTopTags(shopDomain, accessToken, sampleSize = 200, topN = 3
 
 // ─── Price range per product type ──────────────────────────────────────────
 // Samples best-selling products per type for a price-range summary.
+// Only includes ACTIVE products published to the Online Store sales channel.
 async function priceRangesByType(shopDomain, accessToken) {
   const data = await adminQuery(shopDomain, accessToken, `{
-    products(first: 250, sortKey: UPDATED_AT) {
+    products(first: 250, sortKey: UPDATED_AT, query: "status:ACTIVE published_status:published") {
       nodes { productType priceRangeV2 { minVariantPrice { amount currencyCode } maxVariantPrice { amount currencyCode } } }
     }
   }`);
@@ -129,8 +131,9 @@ async function sampleVariantSpecs(shopDomain, accessToken) {
   if (!definitions.length) return null;
 
   // 2. Sample values: best-selling products → first 2 variants → product_details
+  // Only ACTIVE products published to the Online Store sales channel.
   const sampleData = await adminQuery(shopDomain, accessToken, `{
-    products(first: 60, sortKey: UPDATED_AT) {
+    products(first: 60, sortKey: UPDATED_AT, query: "status:ACTIVE published_status:published") {
       nodes {
         productType
         variants(first: 2) {
@@ -179,20 +182,38 @@ async function sampleVariantSpecs(shopDomain, accessToken) {
 
 // ─── Main sync ──────────────────────────────────────────────────────────────
 export async function syncStoreKnowledge(shopDomain, trigger = 'automatic') {
-  const existing = await prisma.syncStatus.findUnique({ where: { shopDomain } });
-  if (existing?.status === 'running') return;
+  try {
+    await prisma.syncStatus.create({ data: { shopDomain, status: 'idle' } });
+  } catch (e) {
+    // Ignore unique constraint violation
+  }
+
+  const thirtyMinsAgo = new Date(Date.now() - 30 * 60_000);
+  const updated = await prisma.syncStatus.updateMany({
+    where: { 
+      shopDomain, 
+      OR: [
+        { status: { not: 'running' } },
+        { updatedAt: { lt: thirtyMinsAgo } }
+      ]
+    },
+    data: { status: 'running', progress: 'Starting…', error: null, updatedAt: new Date() }
+  });
+
+  if (updated.count === 0) return; // Sync is currently locked/running
 
   const logEntry = await prisma.syncLog.create({ data: { shopDomain, trigger, status: 'running' } });
 
-  await prisma.syncStatus.upsert({
-    where: { shopDomain },
-    create: { shopDomain, status: 'running', progress: 'Starting…' },
-    update: { status: 'running', progress: 'Starting…', error: null },
-  });
-
   try {
     const accessToken = await getOfflineAccessTokenByShop(shopDomain);
-    if (!accessToken) throw new Error('No offline access token');
+    if (!accessToken) {
+      throw new Error(
+        'No offline access token found for this shop. ' +
+        'The app needs to be reinstalled so Shopify can issue a fresh offline token. ' +
+        'In your Shopify Partner Dashboard → Apps → select your app → Test on development store, ' +
+        'or ask the merchant to reinstall the app from the Shopify App Store.'
+      );
+    }
 
     // ── 1. Shop summary + product counts (single fast query) ───────────────
     await updateProgress(shopDomain, 'Fetching shop info…');
@@ -366,7 +387,22 @@ export function buildKnowledgeSummary(knowledge) {
   }
 
   if (Array.isArray(knowledge.priceRanges) && knowledge.priceRanges.length) {
-    const ranges = knowledge.priceRanges.slice(0, 8).map(r => `${r.type} (${r.priceRange})`).join(', ');
+    // priceRanges are stored as { type, min, max, currency } where min/max are integer cents
+    const ranges = knowledge.priceRanges.slice(0, 8).map(r => {
+      const fmt = (cents, currency) => {
+        try {
+          return new Intl.NumberFormat('en-US', {
+            style: 'currency', currency: currency || 'USD',
+            minimumFractionDigits: 0, maximumFractionDigits: 0,
+          }).format(cents / 100);
+        } catch {
+          return `$${(cents / 100).toFixed(0)}`;
+        }
+      };
+      const minStr = fmt(r.min, r.currency);
+      const maxStr = fmt(r.max, r.currency);
+      return r.min === r.max ? `${r.type} (${minStr})` : `${r.type} (${minStr}–${maxStr})`;
+    }).join(', ');
     lines.push(`Price ranges: ${ranges}`);
   }
 

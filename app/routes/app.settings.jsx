@@ -34,7 +34,20 @@ export const action = async ({ request }) => {
   return { started: true };
 };
 
-const STEPS = ["Starting…","Fetching shop info…","Fetching collections…","Fetching product types…","Fetching pages…","Fetching blogs & articles…","Sync complete"];
+// All steps must match the progress strings emitted by store-sync.server.js → updateProgress()
+const STEPS = [
+  "Starting…",
+  "Fetching shop info…",
+  "Fetching product types…",
+  "Sampling product tags…",
+  "Sampling price ranges…",
+  "Fetching collections…",
+  "Sampling variant specifications…",
+  "Fetching pages…",
+  "Fetching blogs & articles…",
+  "Syncing FAQ knowledge…",
+  "Sync complete",
+];
 function stepProgress(p) {
   const i = STEPS.findIndex(s => s === p);
   return i < 0 ? 10 : Math.round(((i + 1) / STEPS.length) * 100);
