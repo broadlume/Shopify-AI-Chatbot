@@ -273,7 +273,10 @@ async function handleHistoryRequest(request, conversationId) {
     }
   }
 
-  const messages = await getConversationHistory(conversationId);
+  const explicitShopDomain = request.headers.get("X-Shopify-Shop-Domain");
+  const shopDomain = explicitShopDomain || requestingHost;
+
+  const messages = await getConversationHistory(conversationId, shopDomain);
   return new Response(JSON.stringify({ messages }), { headers: getCorsHeaders(request) });
 }
 
@@ -405,10 +408,10 @@ async function handleChatSession({
     // Save user message to the database.
     // Use displayMessage (the clean text without any injected product-context prefix)
     // so history replay shows the original user words, not the AI prompt context.
-    await saveMessage(conversationId, 'user', displayMessage ?? userMessage);
+    await saveMessage(conversationId, 'user', displayMessage ?? userMessage, shopDomain);
 
     // Fetch all messages from the database for this conversation
-    const dbMessages = await getConversationHistory(conversationId);
+    const dbMessages = await getConversationHistory(conversationId, shopDomain);
 
     // Format messages for AI API
     conversationHistory = dbMessages.map(dbMessage => {
@@ -573,7 +576,7 @@ async function handleChatSession({
               : typeof message.content === 'string' ? message.content : '';
             if (textBlocks) lastAssistantText = textBlocks;
 
-            lastAssistantSavePromise = saveMessage(conversationId, message.role, JSON.stringify(message.content))
+            lastAssistantSavePromise = saveMessage(conversationId, message.role, JSON.stringify(message.content), shopDomain)
               .catch((error) => {
                 console.error("Error saving message to database:", error);
               });
@@ -650,7 +653,7 @@ async function handleChatSession({
 
             // Track catalog tool calls for query logging
             const _catalogNames = AppConfig.tools.catalogToolNames || [AppConfig.tools.productSearchName];
-            if (_catalogNames.includes(toolName) || toolName === 'get_product_details') {
+            if (_catalogNames.includes(toolName)) {
               catalogToolCalled = true;
             }
 
@@ -769,7 +772,8 @@ async function handleChatSession({
       saveMessage(
         conversationId,
         'assistant',
-        JSON.stringify({ _chat_type: 'product_results', products: productsToDisplay })
+        JSON.stringify({ _chat_type: 'product_results', products: productsToDisplay }),
+        shopDomain
       ).catch((err) => console.error('Error persisting product results:', err));
     }
   } catch (error) {

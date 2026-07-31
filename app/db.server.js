@@ -145,26 +145,32 @@ export async function getCustomerToken(conversationId) {
 /**
  * Create or update a conversation in the database
  * @param {string} conversationId - The conversation ID
+ * @param {string} [shopDomain] - The shop domain
  * @returns {Promise<Object>} - The created or updated conversation
  */
-export async function createOrUpdateConversation(conversationId) {
+export async function createOrUpdateConversation(conversationId, shopDomain) {
   try {
     const existingConversation = await prisma.conversation.findUnique({
       where: { id: conversationId }
     });
 
     if (existingConversation) {
+      if (existingConversation.shopDomain && shopDomain && existingConversation.shopDomain !== shopDomain) {
+        throw new Error('Conversation belongs to a different shop');
+      }
       return await prisma.conversation.update({
         where: { id: conversationId },
         data: {
-          updatedAt: new Date()
+          updatedAt: new Date(),
+          ...(shopDomain ? { shopDomain } : {})
         }
       });
     }
 
     return await prisma.conversation.create({
       data: {
-        id: conversationId
+        id: conversationId,
+        shopDomain
       }
     });
   } catch (error) {
@@ -178,12 +184,13 @@ export async function createOrUpdateConversation(conversationId) {
  * @param {string} conversationId - The conversation ID
  * @param {string} role - The message role (user or assistant)
  * @param {string} content - The message content
+ * @param {string} [shopDomain] - The shop domain
  * @returns {Promise<Object>} - The saved message
  */
-export async function saveMessage(conversationId, role, content) {
+export async function saveMessage(conversationId, role, content, shopDomain) {
   try {
     // Ensure the conversation exists
-    await createOrUpdateConversation(conversationId);
+    await createOrUpdateConversation(conversationId, shopDomain);
 
     // Create the message
     return await prisma.message.create({
@@ -202,12 +209,17 @@ export async function saveMessage(conversationId, role, content) {
 /**
  * Get conversation history
  * @param {string} conversationId - The conversation ID
+ * @param {string} [shopDomain] - The shop domain
  * @returns {Promise<Array>} - Array of messages in the conversation
  */
-export async function getConversationHistory(conversationId) {
+export async function getConversationHistory(conversationId, shopDomain) {
   try {
+    const where = { conversationId };
+    if (shopDomain) {
+      where.conversation = { shopDomain };
+    }
     const messages = await prisma.message.findMany({
-      where: { conversationId },
+      where,
       orderBy: { createdAt: 'asc' }
     });
 
