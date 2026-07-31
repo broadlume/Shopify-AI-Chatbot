@@ -18,7 +18,7 @@ SHOPIFY_API_KEY=<your_shopify_app_client_id>
 SHOPIFY_API_SECRET=<your_shopify_app_client_secret>
 SHOPIFY_APP_URL=<your_tunnel_or_local_url>
 SCOPES=unauthenticated_read_product_listings,read_products,read_content,read_product_listings
-DATABASE_URL=file:./dev.sqlite
+DATABASE_URL="postgresql://user:password@host:5432/dbname"
 ```
 
 You can start from `.env.example` and then customize optional values such as `ANTHROPIC_MODEL`, `REDIRECT_URL`, and metafield fallback settings.
@@ -44,12 +44,13 @@ You can start from `.env.example` and then customize optional values such as `AN
   - Environment fallback allowlists when admin permissions are not configured yet
 - Preset configuration UI for welcome screen chips/cards and quick actions.
 - Per-shop chatbot settings (welcome message, bubble color, prompt style) that override theme defaults.
+- Multi-tenant architecture: Full data isolation across 40-50+ Shopify Plus stores on a single deployed instance, keying all data to the immutable `.myshopify.com` domain to prevent cross-contamination even with custom domains.
 
 ## Project Structure
 
 - `app/`: Embedded admin app + chat API routes + backend services.
 - `extensions/chat-bubble/`: Shopify theme extension for storefront chat bubble/widget.
-- `prisma/`: SQLite schema and migrations for sessions, conversations, FAQs, logs, and config.
+- `prisma/`: PostgreSQL schema and migrations for sessions, conversations, FAQs, logs, and config.
 - `shopify.app.toml` / `shopify.app.chatbot.toml`: Shopify app CLI configuration.
 
 ## Tech Stack
@@ -57,7 +58,7 @@ You can start from `.env.example` and then customize optional values such as `AN
 - React Router 7
 - Shopify App React Router SDK + Polaris
 - Anthropic Messages API (Claude, streaming)
-- Prisma + SQLite
+- Prisma + PostgreSQL
 - Shopify Theme App Extension
 
 ## Prerequisites
@@ -153,7 +154,7 @@ After installing the app in your dev store, open the embedded admin app and mana
 
 ## Operational Notes
 
-- Data persistence uses SQLite via Prisma (`DATABASE_URL`).
+- Data persistence uses PostgreSQL via Prisma (`DATABASE_URL`).
 - Chat conversations and tool traces rely on per-conversation IDs managed server-side.
 - The project uses Anthropic Claude in backend services.
 
