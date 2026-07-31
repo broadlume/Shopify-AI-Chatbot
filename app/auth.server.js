@@ -17,6 +17,9 @@ export async function generateAuthUrl(conversationId, shopId) {
 
   // Use the actual app URL for redirect
   const redirectUri = process.env.REDIRECT_URL;
+  if (!redirectUri) {
+    throw new Error('REDIRECT_URL environment variable is missing.');
+  }
 
   // Include the conversation ID and shop ID in the state parameter for tracking
   // Use '::' as separator (not '-') to avoid ambiguity with IDs that contain hyphens

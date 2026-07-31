@@ -146,14 +146,14 @@ export function createToolService({ shopDomain } = {}) {
       query CheckSampling($ids: [ID!]!) {
         nodes(ids: $ids) {
           ... on Product {
-            id title status publishedOnCurrentChannel
+            id title status publishedAt
             productSampling: metafield(namespace: "additional_data", key: "enable_sampling") { value }
           }
           ... on ProductVariant {
             id title
             variantSampling: metafield(namespace: "additional_data", key: "enable_sampling") { value }
             product {
-              id title status publishedOnCurrentChannel
+              id title status publishedAt
               productSampling: metafield(namespace: "additional_data", key: "enable_sampling") { value }
             }
           }
@@ -186,8 +186,8 @@ export function createToolService({ shopDomain } = {}) {
 
         if (isVariant) {
           const parentProduct = node.product;
-          // Deny sampling for products that aren't active / not on the Online Store
-          if (parentProduct?.status !== 'ACTIVE' || parentProduct?.publishedOnCurrentChannel === false) {
+          // Deny sampling for products that aren't active / not published
+          if (parentProduct?.status !== 'ACTIVE' || !parentProduct?.publishedAt) {
             return { allowed: false, denied: parentProduct?.title || node.title || 'product' };
           }
 
@@ -211,8 +211,8 @@ export function createToolService({ shopDomain } = {}) {
           }
         } else {
           // Direct product GID
-          // Deny sampling for products that aren't active / not on the Online Store
-          if (node.status !== 'ACTIVE' || node.publishedOnCurrentChannel === false) {
+          // Deny sampling for products that aren't active / not published
+          if (node.status !== 'ACTIVE' || !node.publishedAt) {
             return { allowed: false, denied: node.title || 'product' };
           }
 
@@ -367,7 +367,7 @@ export function createToolService({ shopDomain } = {}) {
             descriptionHtml
             vendor
             tags
-            publishedOnCurrentChannel
+            publishedAt
             priceRangeV2 {
               minVariantPrice { amount currencyCode }
             }
@@ -386,7 +386,7 @@ export function createToolService({ shopDomain } = {}) {
               descriptionHtml
               vendor
               tags
-              publishedOnCurrentChannel
+              publishedAt
               priceRangeV2 {
                 minVariantPrice { amount currencyCode }
               }
@@ -439,13 +439,13 @@ export function createToolService({ shopDomain } = {}) {
         const product = node.handle !== undefined ? node : node.product;
         if (!product?.id || seen.has(product.id)) continue;
 
-        // Filter: must be ACTIVE and published to the Online Store channel
+        // Filter: must be ACTIVE and published
         if (product.status !== 'ACTIVE') {
           console.log(`[chatbot] Skipping product "${product.title}" — status: ${product.status}`);
           continue;
         }
-        if (product.publishedOnCurrentChannel === false) {
-          console.log(`[chatbot] Skipping product "${product.title}" — not published on Online Store`);
+        if (!product.publishedAt) {
+          console.log(`[chatbot] Skipping product "${product.title}" — not published`);
           continue;
         }
 

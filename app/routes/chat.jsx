@@ -88,20 +88,8 @@ function extractCartItemsFromArgs(toolArgs) {
     items.push({ id: String(directId), quantity: toolArgs.quantity ?? 1 });
   }
 
-  // ── Fallback: recursively scan the whole object for ProductVariant GIDs ──
-  // Handles any unknown MCP schema shape.
-  if (!items.length) {
-    const gids = [];
-    const scan = (val) => {
-      if (typeof val === 'string' && val.includes('ProductVariant')) {
-        gids.push(val);
-      } else if (val && typeof val === 'object') {
-        Object.values(val).forEach(scan);
-      }
-    };
-    scan(toolArgs);
-    gids.forEach(gid => items.push({ id: gid, quantity: 1 }));
-  }
+  // We removed the recursive fallback to prevent accidental mass-additions of 
+  // related products or upsells that might be present in the tool arguments.
 
   console.log('[chatbot] extractCartItemsFromArgs result:', JSON.stringify(items));
   return items;
@@ -232,7 +220,7 @@ export async function action({ request }) {
     return await handleChatRequest(request);
   } catch (error) {
     console.error('Unhandled error in chat action:', error);
-    return new Response(JSON.stringify({ error: String(error.message || error) }), {
+    return new Response(JSON.stringify({ error: 'An internal server error occurred. Please try again later.' }), {
       status: 500,
       headers: { ...getCorsHeaders(request), 'Content-Type': 'application/json' }
     });

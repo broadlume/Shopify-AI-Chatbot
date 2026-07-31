@@ -182,16 +182,27 @@ async function sampleVariantSpecs(shopDomain, accessToken) {
 
 // ─── Main sync ──────────────────────────────────────────────────────────────
 export async function syncStoreKnowledge(shopDomain, trigger = 'automatic') {
-  const existing = await prisma.syncStatus.findUnique({ where: { shopDomain } });
-  if (existing?.status === 'running') return;
+  try {
+    await prisma.syncStatus.create({ data: { shopDomain, status: 'idle' } });
+  } catch (e) {
+    // Ignore unique constraint violation
+  }
+
+  const thirtyMinsAgo = new Date(Date.now() - 30 * 60_000);
+  const updated = await prisma.syncStatus.updateMany({
+    where: { 
+      shopDomain, 
+      OR: [
+        { status: { not: 'running' } },
+        { updatedAt: { lt: thirtyMinsAgo } }
+      ]
+    },
+    data: { status: 'running', progress: 'Starting…', error: null, updatedAt: new Date() }
+  });
+
+  if (updated.count === 0) return; // Sync is currently locked/running
 
   const logEntry = await prisma.syncLog.create({ data: { shopDomain, trigger, status: 'running' } });
-
-  await prisma.syncStatus.upsert({
-    where: { shopDomain },
-    create: { shopDomain, status: 'running', progress: 'Starting…' },
-    update: { status: 'running', progress: 'Starting…', error: null },
-  });
 
   try {
     const accessToken = await getOfflineAccessTokenByShop(shopDomain);
