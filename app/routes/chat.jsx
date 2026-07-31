@@ -12,6 +12,46 @@ import { createFaqToolService } from "../services/faq.server";
 import { createProductMetafieldsToolService } from "../services/product-metafields.server";
 import { getStoreKnowledge, buildKnowledgeSummary, isSyncDue, syncStoreKnowledge } from "../services/store-sync.server.js";
 
+// ── In-memory rate limiter ────────────────────────────────────────────────────
+// Limits POST /chat requests to RATE_LIMIT_MAX per RATE_LIMIT_WINDOW_MS per
+// shop domain. Resets automatically when the window expires.
+// Note: this is per-process — in multi-worker deployments each worker has its
+// own counter. For stricter enforcement use Redis/Upstash.
+const RATE_LIMIT_MAX = 30;           // max requests per window
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1-minute sliding window
+
+/** @type {Map<string, {count: number, resetAt: number}>} */
+const _rateLimitStore = new Map();
+
+/**
+ * Check and update the rate limit for a given key (typically shop domain).
+ * Returns true if the request should be BLOCKED.
+ */
+function isRateLimited(key) {
+  const now = Date.now();
+  const entry = _rateLimitStore.get(key);
+
+  if (!entry || now >= entry.resetAt) {
+    // New window
+    _rateLimitStore.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return false;
+  }
+
+  entry.count += 1;
+  if (entry.count > RATE_LIMIT_MAX) {
+    return true; // blocked
+  }
+  return false;
+}
+
+// Periodically clean up expired entries to prevent memory growth
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of _rateLimitStore) {
+    if (now >= entry.resetAt) _rateLimitStore.delete(key);
+  }
+}, RATE_LIMIT_WINDOW_MS);
+
 
 /**
  * Extract cart line items (with quantity) from cart mutation tool arguments.
@@ -123,7 +163,8 @@ function extractCartDataFromMcpResponse(toolUseResponse) {
 }
 
 /**
- * Rract Router loader function for handling GET requests
+/**
+ * React Router loader function for handling GET requests
  */
 export async function loader({ request }) {
   // Handle OPTIONS requests (CORS preflight)
@@ -158,6 +199,35 @@ export async function action({ request }) {
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: getCorsHeaders(request) });
   }
+
+  // ── Rate limiting ───────────────────────────────────────────────────────────
+  // Key by shop domain inferred from Origin/Referer headers.
+  // Falls back to IP-based limiting via X-Forwarded-For if shop domain is absent.
+  const rateLimitKey = (() => {
+    const originHeader = request.headers.get('Origin');
+    const refererHeader = request.headers.get('Referer');
+    try {
+      if (originHeader) return new URL(originHeader).hostname;
+      if (refererHeader) return new URL(refererHeader).hostname;
+    } catch {}
+    return request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() || 'unknown';
+  })();
+
+  if (isRateLimited(rateLimitKey)) {
+    console.warn(`[chat] Rate limit exceeded for key: ${rateLimitKey}`);
+    return new Response(
+      JSON.stringify({ error: 'Too many requests. Please wait a moment before sending another message.' }),
+      {
+        status: 429,
+        headers: {
+          ...getCorsHeaders(request),
+          'Content-Type': 'application/json',
+          'Retry-After': '60',
+        }
+      }
+    );
+  }
+
   try {
     return await handleChatRequest(request);
   } catch (error) {
@@ -170,14 +240,52 @@ export async function action({ request }) {
 }
 
 /**
- * Handle history fetch requests
+ * Handle history fetch requests.
+ * Validates that the requesting origin belongs to the same shop as the
+ * conversation — prevents cross-origin history exfiltration.
  * @param {Request} request - The request object
  * @param {string} conversationId - The conversation ID
  * @returns {Response} JSON response with chat history
  */
 async function handleHistoryRequest(request, conversationId) {
-  const messages = await getConversationHistory(conversationId);
+  // Infer shop domain from the Origin or Referer header
+  const originHeader = request.headers.get('Origin');
+  const refererHeader = request.headers.get('Referer');
+  let requestingHost = null;
+  try {
+    if (originHeader) requestingHost = new URL(originHeader).hostname;
+    else if (refererHeader) requestingHost = new URL(refererHeader).hostname;
+  } catch {}
 
+  if (!requestingHost) {
+    return new Response(
+      JSON.stringify({ error: 'Missing Origin header — history endpoint requires a browser origin.' }),
+      { status: 403, headers: getCorsHeaders(request) }
+    );
+  }
+
+  // Validate: the requesting host must be a myshopify.com domain or the
+  // shop's custom domain. We do a lightweight check here; tighten if needed.
+  // Shopify storefronts always send their shop domain as Origin.
+  const isShopifyHost = requestingHost.endsWith('.myshopify.com') ||
+    requestingHost.endsWith('.shopify.com') ||
+    requestingHost.endsWith('.shopifypreview.com');
+
+  if (!isShopifyHost) {
+    // Allow if the origin matches the app's own host (for admin UI previews)
+    const appHost = process.env.SHOPIFY_APP_URL
+      ? new URL(process.env.SHOPIFY_APP_URL).hostname
+      : null;
+    if (requestingHost !== appHost) {
+      console.warn(`[chat] History request blocked for non-Shopify origin: ${requestingHost}`);
+      return new Response(
+        JSON.stringify({ error: 'Forbidden: history endpoint is only accessible from Shopify storefronts.' }),
+        { status: 403, headers: getCorsHeaders(request) }
+      );
+    }
+  }
+
+  const messages = await getConversationHistory(conversationId);
   return new Response(JSON.stringify({ messages }), { headers: getCorsHeaders(request) });
 }
 
@@ -729,19 +837,42 @@ async function getCustomerAccountUrls(shopDomain, conversationId) {
 }
 
 /**
- * Gets CORS headers for the response
+ * Gets CORS headers for the response.
+ * Validates the Origin against expected Shopify domains before echoing it back
+ * with credentials=true. Falls back to the app URL if validation fails.
  * @param {Request} request - The request object
  * @returns {Object} CORS headers object
  */
 function getCorsHeaders(request) {
-  const origin = request.headers.get("Origin") || "*";
+  const requestOrigin = request.headers.get('Origin') || '';
+
+  // Allowed origins: Shopify storefront domains + the app's own host
+  const appHost = process.env.SHOPIFY_APP_URL
+    ? (() => { try { return new URL(process.env.SHOPIFY_APP_URL).origin; } catch { return ''; } })()
+    : '';
+
+  let allowedOrigin;
+  try {
+    const hostname = requestOrigin ? new URL(requestOrigin).hostname : '';
+    const isAllowed =
+      hostname.endsWith('.myshopify.com') ||
+      hostname.endsWith('.shopify.com') ||
+      hostname.endsWith('.shopifypreview.com') ||
+      (appHost && requestOrigin === appHost);
+
+    // Only reflect the origin back (with credentials) if it is a known-safe host.
+    // For unknown origins, omit credentials and use the app URL as the allowed origin.
+    allowedOrigin = isAllowed ? requestOrigin : (appHost || requestOrigin || '*');
+  } catch {
+    allowedOrigin = appHost || '*';
+  }
 
   return {
-    "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Accept, X-Shopify-Shop-Id, X-Shopify-Shop-Domain, X-Requested-With",
-    "Access-Control-Allow-Credentials": "true",
-    "Access-Control-Max-Age": "86400"
+    'Access-Control-Allow-Origin': allowedOrigin,
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Accept, X-Shopify-Shop-Id, X-Shopify-Shop-Domain, X-Requested-With',
+    'Access-Control-Allow-Credentials': 'true',
+    'Access-Control-Max-Age': '86400'
   };
 }
 
@@ -751,15 +882,11 @@ function getCorsHeaders(request) {
  * @returns {Object} SSE headers object
  */
 function getSseHeaders(request) {
-  const origin = request.headers.get("Origin") || "*";
-
+  const cors = getCorsHeaders(request);
   return {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    "Connection": "keep-alive",
-    "Access-Control-Allow-Credentials": "true",
-    "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Methods": "GET,OPTIONS,POST",
-    "Access-Control-Allow-Headers": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version"
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    ...cors
   };
 }

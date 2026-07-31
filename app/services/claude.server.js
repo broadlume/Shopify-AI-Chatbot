@@ -8,12 +8,40 @@ import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
 
+
 const _promptsFile = resolve(dirname(fileURLToPath(import.meta.url)), "../prompts/prompts.json");
 
-/** Read prompts fresh from disk on every call so edits to prompts.json
- *  take effect immediately without restarting the dev server. */
+// ── Prompts cache ─────────────────────────────────────────────────────────────
+// Read and parse prompts.json exactly once (on first use) and cache the result.
+// Reading from disk on every request adds unnecessary I/O under load.
+// Validation runs at startup so a missing/malformed file fails fast.
+let _cachedPrompts = null;
+
+/** Validates that prompts.json exists and is parseable at server startup. */
+function validatePromptsFile() {
+  try {
+    const raw = readFileSync(_promptsFile, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (!parsed?.systemPrompts) {
+      throw new Error('prompts.json is missing the "systemPrompts" key.');
+    }
+    _cachedPrompts = parsed;
+    console.log(`[claude] Loaded ${Object.keys(parsed.systemPrompts).length} system prompt(s) from prompts.json`);
+  } catch (err) {
+    throw new Error(
+      `[startup] Failed to load prompts.json at ${_promptsFile}: ${err.message}\n` +
+      'Ensure the file exists and contains valid JSON with a "systemPrompts" object.'
+    );
+  }
+}
+
+// Run validation immediately at module load time (server startup)
+validatePromptsFile();
+
+/** Return cached prompts — loads from disk only if cache is empty. */
 function loadSystemPrompts() {
-  return JSON.parse(readFileSync(_promptsFile, "utf-8"));
+  if (!_cachedPrompts) validatePromptsFile(); // safety: should already be set
+  return _cachedPrompts;
 }
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";

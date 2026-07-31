@@ -1,12 +1,20 @@
 import { PrismaClient } from "@prisma/client";
 
-if (process.env.NODE_ENV !== "production") {
-  if (!global.prismaGlobal) {
-    global.prismaGlobal = new PrismaClient();
-  }
+// ── Prisma singleton ──────────────────────────────────────────────────────────
+// Use globalThis so that a single PrismaClient instance is shared across all
+// module imports in both development (HMR re-imports) and production.
+// The old pattern only set global.prismaGlobal in !production, which caused
+// `new PrismaClient()` to run on every import in prod — exhausting the DB
+// connection pool under any meaningful load.
+const globalForPrisma = globalThis;
+
+if (!globalForPrisma.prisma) {
+  globalForPrisma.prisma = new PrismaClient({
+    log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
+  });
 }
 
-const prisma = global.prismaGlobal ?? new PrismaClient();
+const prisma = globalForPrisma.prisma;
 
 export default prisma;
 
@@ -267,10 +275,18 @@ export async function getOfflineAccessTokenByShop(shopDomain) {
   try {
     if (!shopDomain) return null;
 
+    // Prefer a session with no expiry (true offline tokens are long-lived).
+    // Filter out any sessions whose expires date has already passed — these
+    // were either online sessions stored with isOnline=false by mistake, or
+    // revoked tokens that were never cleaned up.
     const session = await prisma.session.findFirst({
       where: {
         shop: shopDomain,
         isOnline: false,
+        OR: [
+          { expires: null },
+          { expires: { gt: new Date() } },
+        ],
       },
       orderBy: {
         expires: 'desc',
